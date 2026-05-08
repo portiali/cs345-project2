@@ -24,7 +24,7 @@ type Simulator struct {
 	nextSnapshotId int
 	servers        map[string]*Server // key = server ID
 	logger         *Logger
-	// TODO: ADD MORE FIELDS HERE
+	snapshotCompleted	*syncMap // snapshotId --> server --> bool
 }
 
 func NewSimulator() *Simulator {
@@ -109,20 +109,50 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	snapshotId := sim.nextSnapshotId
 	sim.nextSnapshotId++
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
-	// TODO: IMPLEMENT ME
+	sim.snapshotCompleted.Store(snapshotId, NewSyncMap())
+	sim.servers[serverId].StartSnapshot(snapshotId)
 }
 
 // Callback for servers to notify the simulator that the snapshot process has
 // completed on a particular server
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
-	// TODO: IMPLEMENT ME
+	completions, ok := sim.snapshotCompleted.Load(snapshotId)
+	if ok {
+		completed := completions.(*SyncMap)
+		completed.Store(serverId, true)
+	} else {
+		debug("Error: no completion map found for snapshot %d\n", snapshotId)
+		return
+	}
 }
 
 // Collect and merge snapshot state from all the servers.
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
-	// TODO: IMPLEMENT ME
+	completions, ok := sim.snapshotCompleted.Load(snapshotId)
+	if ok {
+		completed := completions.(*SyncMap)
+	} else {
+		debug("Error: no completion map found for snapshot %d\n", snapshotId)
+		return nil
+	}
+
+	for {
+    	count := 0
+    	for serverId := range sim.servers {
+        	if done, ok := statusMap.Load(serverId); ok && done.(bool) {
+            	count++
+        	}
+    	}
+    	if count == len(sim.servers) {
+        	break
+    	}
+	}
+
 	snap := SnapshotState{snapshotId, make(map[string]int), make([]*SnapshotMessage, 0)}
+	for _, serverId := range sim.servers {
+		// NEED TODOOOO
+	}
 	return &snap
 }
