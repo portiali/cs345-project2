@@ -2,6 +2,12 @@ package chandy_lamport
 
 import "log"
 
+type SnapshotData struct {
+	tokens    int
+	openLinks map[string]bool              // key = src, true = still waiting for marker
+	messages  map[string][]*SnapshotMessage // key = src, value = messages received
+}
+
 // The main participant of the distributed snapshot protocol.
 // Servers exchange token messages and marker messages among each other.
 // Token messages represent the transfer of tokens from one server to another.
@@ -13,7 +19,7 @@ type Server struct {
 	sim           *Simulator
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
-	// TODO: ADD MORE FIELDS HERE
+	snapshots     map[int]*SnapshotData // key = snapshotId
 }
 
 // A unidirectional communication channel between two servers
@@ -31,6 +37,7 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
+		make(map[int]*SnapshotData),
 	}
 }
 
@@ -84,11 +91,48 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 // When the snapshot algorithm completes on this server, this function
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
-	// TODO: IMPLEMENT ME
+	switch msg := message.(type) {
+	case TokenMessage:
+		server.Tokens += msg.numTokens
+		for snapshotId, data := range server.snapshots {
+			if data.openLinks[src] {
+				data.messages[src] = append(data.messages[src], &SnapshotMessage{src, server.Id, msg})
+				_ = snapshotId
+			}
+		}
+	case MarkerMessage:
+		snapshotId := msg.snapshotId
+		if _, exists := server.snapshots[snapshotId]; !exists {
+			server.StartSnapshot(snapshotId)
+		}
+		data := server.snapshots[snapshotId]
+		data.openLinks[src] = false
+		allClosed := true
+		for _, open := range data.openLinks {
+			if open {
+				allClosed = false
+				break
+			}
+		}
+		if allClosed {
+			server.sim.NotifySnapshotComplete(server.Id, snapshotId)
+		}
+	default:
+		log.Fatal("Unknown message type: ", message)
+	}
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
-	// TODO: IMPLEMENT ME
+	openLinks := make(map[string]bool)
+	for src := range server.inboundLinks {
+		openLinks[src] = true
+	}
+	server.snapshots[snapshotId] = &SnapshotData{
+		tokens:    server.Tokens,
+		openLinks: openLinks,
+		messages:  make(map[string][]*SnapshotMessage),
+	}
+	server.SendToNeighbors(MarkerMessage{snapshotId})
 }

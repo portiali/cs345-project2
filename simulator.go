@@ -24,7 +24,7 @@ type Simulator struct {
 	nextSnapshotId int
 	servers        map[string]*Server // key = server ID
 	logger         *Logger
-	// TODO: ADD MORE FIELDS HERE
+	snapshotData   *SyncMap // key = snapshotId (int) -> *SyncMap (key = serverId (string) -> *SnapshotData)
 }
 
 func NewSimulator() *Simulator {
@@ -34,6 +34,7 @@ func NewSimulator() *Simulator {
 		0,
 		make(map[string]*Server),
 		NewLogger(),
+		NewSyncMap(),
 	}
 }
 
@@ -109,20 +110,45 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 	snapshotId := sim.nextSnapshotId
 	sim.nextSnapshotId++
 	sim.logger.RecordEvent(sim.servers[serverId], StartSnapshot{serverId, snapshotId})
-	// TODO: IMPLEMENT ME
+	sim.snapshotData.Store(snapshotId, NewSyncMap())
+	sim.servers[serverId].StartSnapshot(snapshotId)
 }
 
 // Callback for servers to notify the simulator that the snapshot process has
 // completed on a particular server
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
-	// TODO: IMPLEMENT ME
+	server := sim.servers[serverId]
+	innerMap, _ := sim.snapshotData.Load(snapshotId)
+	innerMap.(*SyncMap).Store(serverId, server.snapshots[snapshotId])
 }
 
 // Collect and merge snapshot state from all the servers.
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
-	// TODO: IMPLEMENT ME
+	for {
+		count := 0
+		innerMap, _ := sim.snapshotData.Load(snapshotId)
+		if innerMap != nil {
+			innerMap.(*SyncMap).Range(func(k, v interface{}) bool {
+				count++
+				return true
+			})
+		}
+		if count >= len(sim.servers) {
+			break
+		}
+	}
 	snap := SnapshotState{snapshotId, make(map[string]int), make([]*SnapshotMessage, 0)}
+	innerMap, _ := sim.snapshotData.Load(snapshotId)
+	innerMap.(*SyncMap).Range(func(k, v interface{}) bool {
+		serverId := k.(string)
+		data := v.(*SnapshotData)
+		snap.tokens[serverId] = data.tokens
+		for _, msgs := range data.messages {
+			snap.messages = append(snap.messages, msgs...)
+		}
+		return true
+	})
 	return &snap
 }
