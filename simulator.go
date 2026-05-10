@@ -24,7 +24,7 @@ type Simulator struct {
 	nextSnapshotId int
 	servers        map[string]*Server // key = server ID
 	logger         *Logger
-	snapshotCompleted	*syncMap // snapshotId --> server --> bool
+	snapshotCompleted 	*SyncMap // snapshotId --> server --> bool
 }
 
 func NewSimulator() *Simulator {
@@ -119,11 +119,11 @@ func (sim *Simulator) StartSnapshot(serverId string) {
 func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 	sim.logger.RecordEvent(sim.servers[serverId], EndSnapshot{serverId, snapshotId})
 	completions, ok := sim.snapshotCompleted.Load(snapshotId)
+	var completed *SyncMap
 	if ok {
-		completed := completions.(*SyncMap)
+		completed = completions.(*SyncMap)
 		completed.Store(serverId, true)
 	} else {
-		debug("Error: no completion map found for snapshot %d\n", snapshotId)
 		return
 	}
 }
@@ -132,17 +132,19 @@ func (sim *Simulator) NotifySnapshotComplete(serverId string, snapshotId int) {
 // This function blocks until the snapshot process has completed on all servers.
 func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	completions, ok := sim.snapshotCompleted.Load(snapshotId)
+	var completed *SyncMap
 	if ok {
-		completed := completions.(*SyncMap)
+		completed = completions.(*SyncMap)
 	} else {
-		debug("Error: no completion map found for snapshot %d\n", snapshotId)
 		return nil
 	}
 
+	// wait until all servers have completed the snapshot process
 	for {
     	count := 0
     	for serverId := range sim.servers {
-        	if done, ok := completed.Load(serverId); ok && done.(bool) {
+			done, ok := completed.Load(serverId)
+        	if ok && done.(bool) {
             	count++
         	}
     	}
@@ -151,6 +153,7 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
     	}
 	}
 
+	// merge the snapshot state from all the servers
 	snap := SnapshotState{
 		id:       snapshotId,
 		tokens:   make(map[string]int),
@@ -158,17 +161,19 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	}
 
 	for _, server := range sim.servers {
-		snap, ok := server.snaps.Load(snapshotId)
+		snapObj, ok := server.snaps.Load(snapshotId)
 		if !ok {
 			return nil
 		}
 
+		// record the number of tokens on this server
+		localState := snapObj.(*localState)
 		token, ok := localState.tokens.Load("tokens")
 		if ok {
 			snap.tokens[server.Id] = token.(int)
 		}
-		
-		localState := snap.(*localState)
+
+		// record the messages in transit on the inbound channels to this server
 		localState.messages.Range(func(key, value interface{}) bool {
 			src := key.(string)
 			list := value.([]interface{})
@@ -183,5 +188,6 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 			return true
 		})
 	}
+
 	return &snap
 }

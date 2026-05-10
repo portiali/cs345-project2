@@ -19,7 +19,8 @@ type Server struct {
 type localState struct {
 	tokens      	*SyncMap
 	messages 		*SyncMap
-	markersCount    int
+	closedChannels  *SyncMap
+	receivedMarkers *SyncMap
 }
 
 // A unidirectional communication channel between two servers
@@ -37,6 +38,7 @@ func NewServer(id string, tokens int, sim *Simulator) *Server {
 		sim,
 		make(map[string]*Link),
 		make(map[string]*Link),
+		NewSyncMap(),
 	}
 }
 
@@ -90,11 +92,63 @@ func (server *Server) SendTokens(numTokens int, dest string) {
 // When the snapshot algorithm completes on this server, this function
 // should notify the simulator by calling `sim.NotifySnapshotComplete`.
 func (server *Server) HandlePacket(src string, message interface{}) {
-	// TODO: IMPLEMENT ME
+	// if message is a token message, 
+	if msg, isToken := message.(TokenMessage); isToken {
+		server.Tokens += msg.numTokens
+
+		// record the message in the snapshot state that has started but has not yet received a marker on this channel
+        server.snaps.Range(func(key, value interface{}) bool {
+            state := value.(*localState)
+			_, closed := state.closedChannels.Load(src)
+            if !closed {
+            	list, _ := state.messages.LoadOrStore(src, []interface{}{})
+                state.messages.Store(src, append(list.([]interface{}), msg))
+            }
+            return true
+        })
+		
+	// if message is a marker message
+	} else if msg, isMarker := message.(MarkerMessage); isMarker {
+        val, ok := server.snaps.Load(msg.snapshotId)
+
+		// first marker on snapshot
+        if !ok {
+            server.StartSnapshot(msg.snapshotId)
+            val, _ = server.snaps.Load(msg.snapshotId)
+        }
+
+		// mark channel as closed and record that we've received a marker on this channel
+        state := val.(*localState)
+        state.closedChannels.Store(src, true)
+        state.receivedMarkers.Store(src, true)
+
+		// check if we've received markers on all inbound channels
+    	count := 0
+    	for inbound := range server.inboundLinks {
+			done, ok := state.closedChannels.Load(inbound)
+        	if ok && done.(bool) {
+            	count++
+        	} else {
+				break
+			}
+    	}
+
+		if count == len(server.inboundLinks) {
+        	server.sim.NotifySnapshotComplete(server.Id, msg.snapshotId)
+    	}
+    }
 }
 
 // Start the chandy-lamport snapshot algorithm on this server.
 // This should be called only once per server.
 func (server *Server) StartSnapshot(snapshotId int) {
-	// TODO: IMPLEMENT ME
+	localState := &localState{
+		tokens: NewSyncMap(),
+		messages: NewSyncMap(),
+		closedChannels: NewSyncMap(),
+		receivedMarkers: NewSyncMap(),
+	}
+	server.snaps.Store(snapshotId, localState)
+	localState.tokens.Store("tokens", server.Tokens)
+	server.SendToNeighbors(MarkerMessage{snapshotId})
 }
