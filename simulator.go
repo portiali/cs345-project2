@@ -34,6 +34,7 @@ func NewSimulator() *Simulator {
 		0,
 		make(map[string]*Server),
 		NewLogger(),
+		NewSyncMap(),
 	}
 }
 
@@ -141,7 +142,7 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
 	for {
     	count := 0
     	for serverId := range sim.servers {
-        	if done, ok := statusMap.Load(serverId); ok && done.(bool) {
+        	if done, ok := completed.Load(serverId); ok && done.(bool) {
             	count++
         	}
     	}
@@ -150,9 +151,37 @@ func (sim *Simulator) CollectSnapshot(snapshotId int) *SnapshotState {
     	}
 	}
 
-	snap := SnapshotState{snapshotId, make(map[string]int), make([]*SnapshotMessage, 0)}
-	for _, serverId := range sim.servers {
-		// NEED TODOOOO
+	snap := SnapshotState{
+		id:       snapshotId,
+		tokens:   make(map[string]int),
+		messages: make([]*SnapshotMessage, 0),
+	}
+
+	for _, server := range sim.servers {
+		snap, ok := server.snaps.Load(snapshotId)
+		if !ok {
+			return nil
+		}
+
+		token, ok := localState.tokens.Load("tokens")
+		if ok {
+			snap.tokens[server.Id] = token.(int)
+		}
+		
+		localState := snap.(*localState)
+		localState.messages.Range(func(key, value interface{}) bool {
+			src := key.(string)
+			list := value.([]interface{})
+
+			for _, msg := range list {
+				snap.messages = append(snap.messages, &SnapshotMessage{
+					src:     src,
+					dest:    server.Id,
+					message: msg,
+				})
+			}
+			return true
+		})
 	}
 	return &snap
 }

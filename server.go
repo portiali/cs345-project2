@@ -13,7 +13,13 @@ type Server struct {
 	sim           *Simulator
 	outboundLinks map[string]*Link // key = link.dest
 	inboundLinks  map[string]*Link // key = link.src
-	// TODO: ADD MORE FIELDS HERE
+	snaps         *SyncMap
+}
+
+type localState struct {
+	tokens      	*SyncMap
+	messages 		*SyncMap
+	markersCount    int
 }
 
 // A unidirectional communication channel between two servers
